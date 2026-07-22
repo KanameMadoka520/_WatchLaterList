@@ -12,8 +12,22 @@
 .tag-library>div{display:flex;gap:6px;flex-wrap:wrap}
 .tag-library button{border:1px solid #dce2e7;background:#fff;color:#61707d;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer}
 .tag-library button.selected{border-color:#ff6691;color:#cf3f6a;background:#fff3f7}
-.ai-modal{width:min(860px,100%)}
+.ai-modal{width:min(920px,100%)}
 .ai-modal .modal-head h2{display:flex;align-items:center;gap:8px}
+.help-trigger{width:24px;height:24px;flex:0 0 24px;border:0;background:transparent;color:#7a8793;display:grid;place-items:center;padding:0;cursor:pointer;border-radius:4px}
+.help-trigger:hover,.help-trigger:focus-visible{color:#d94270;background:#fff1f5;outline:0}
+.help-overlay{position:fixed;inset:0;z-index:40;background:#17202a73;display:grid;place-items:center;padding:24px}
+.help-dialog{width:min(560px,100%);max-height:min(720px,calc(100vh - 48px));overflow:auto;background:#fff;border:1px solid #dfe4ea;border-radius:8px;box-shadow:0 24px 70px #17202a38;padding:18px}
+.help-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.help-dialog-head>div{display:flex;align-items:center;gap:9px;min-width:0}
+.help-dialog-head svg{color:#617789;flex:0 0 auto}
+.help-dialog-head h3{margin:0;font-size:17px;line-height:1.35}
+.help-dialog-head>button{width:32px;height:32px;border:0;background:transparent;color:#697682;display:grid;place-items:center;cursor:pointer}
+.help-dialog-body{margin-top:14px;color:#4f5e6a;font-size:13px;line-height:1.7}
+.help-dialog-body p{margin:0 0 10px}
+.help-dialog-body ul{margin:8px 0 0;padding-left:20px}
+.help-dialog-body li{margin:7px 0}
+.help-dialog-actions{display:flex;justify-content:flex-end;margin-top:18px}
 .ai-key-note{display:flex;align-items:flex-start;gap:9px;background:#fff7e8;border:1px solid #f2d49d;color:#6f562d;border-radius:7px;padding:10px 12px;margin-top:16px;font-size:11px;line-height:1.5}
 .ai-key-note svg{flex:0 0 auto}
 .ai-key-note code{background:#f4e4c8;padding:2px 4px;border-radius:3px}
@@ -30,6 +44,43 @@
 .ai-help-panel strong{color:#334a5c}
 .ai-vocabulary-note{align-self:end;min-height:38px;display:flex;flex-direction:column;justify-content:center;gap:3px;border:1px solid #e1e6ea;background:#fafbfc;padding:7px 10px;color:#687784;font-size:11px}
 .ai-vocabulary-note strong{color:#3f505e}
+.ai-api-panel{border:1px solid #e0e5e9;background:#fafbfc;padding:12px;margin-top:16px}
+.ai-section-title{display:grid;grid-template-columns:20px minmax(0,1fr) 24px;align-items:start;gap:8px;color:#455764}
+.ai-section-title>svg{margin-top:1px}
+.ai-section-title>div{display:flex;flex-direction:column;gap:3px}
+.ai-section-title strong{font-size:13px;color:#334653}
+.ai-section-title span{font-size:11px;line-height:1.45;color:#75828d}
+.ai-api-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}
+.ai-api-grid label,.ai-unification-controls label{display:flex;flex-direction:column;gap:5px;color:#65727f;font-size:11px}
+.ai-api-grid .wide{grid-column:1/-1}
+.ai-api-grid input,.ai-api-grid select,.ai-unification-controls input,.ai-unification-controls select{height:36px;border:1px solid #dfe4ea;border-radius:6px;padding:0 9px;background:#fff;font:inherit;outline:none}
+.ai-api-grid input:focus,.ai-api-grid select:focus,.ai-unification-controls input:focus,.ai-unification-controls select:focus{border-color:var(--accent)}
+.ai-api-grid input:disabled,.ai-api-grid select:disabled,.ai-unification-controls input:disabled,.ai-unification-controls select:disabled{background:#f1f3f5;color:#8a949d}
+.ai-tabs{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-top:16px;border-bottom:1px solid #dfe4ea}
+.ai-tabs button{min-height:56px;border:0;border-bottom:3px solid transparent;background:#f6f7f8;color:#71808c;padding:9px 13px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer}
+.ai-tabs button:first-child{border-left:1px solid #e1e6ea;border-top:1px solid #e1e6ea}
+.ai-tabs button:last-child{border-right:1px solid #e1e6ea;border-top:1px solid #e1e6ea}
+.ai-tabs button.active{background:#fff;color:#263844;border-bottom-color:var(--accent)}
+.ai-tabs button:disabled{cursor:not-allowed}
+.ai-tabs span{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left}
+.ai-tabs strong{font-size:13px}
+.ai-tabs small{font-size:10px;color:#7c8994;font-weight:400}
+.ai-tab-page{padding-top:14px}
+.ai-unification-panel,.ai-synonym-panel{border:1px solid #dce3e8;background:#f8fafb;padding:13px}
+.ai-synonym-panel{margin-top:12px;background:#fff}
+.ai-unification-controls{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:12px}
+.ai-round-preview{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ai-round-preview span{background:#eef4f7;border:1px solid #d6e1e7;color:#526978;padding:5px 7px;font-size:10px}
+.taxonomy-preview{border:1px solid #b9d8ca;background:#f4fbf7;padding:13px;margin-top:14px}
+.taxonomy-preview-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}
+.taxonomy-preview-head>div{display:flex;flex-direction:column;gap:3px}
+.taxonomy-preview-head strong{font-size:13px;color:#265d46}
+.taxonomy-preview-head span{font-size:10px;color:#5f766b}
+.taxonomy-rounds{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.taxonomy-rounds span{background:#fff;border:1px solid #cfe1d8;color:#557064;padding:4px 7px;font-size:10px}
+.taxonomy-tags{display:flex;flex-wrap:wrap;gap:5px;max-height:138px;overflow:auto;margin-top:10px;padding-right:4px}
+.taxonomy-tags>span{display:flex;align-items:center;gap:4px;background:#fff;border:1px solid #d7e5de;color:#3f5e50;padding:4px 6px;font-size:10px}
+.taxonomy-tags small{color:#8a9a92;font-size:9px}
 .ai-global-settings{border:1px solid #dce3e8;background:#f8fafb;padding:12px}
 .ai-global-title{display:flex;align-items:flex-start;gap:8px;color:#455764}
 .ai-global-title>div{display:flex;flex-direction:column;gap:3px}
@@ -61,6 +112,11 @@
   .ai-form{grid-template-columns:1fr}
   .ai-form label{grid-column:1/-1}
   .ai-global-controls{grid-template-columns:1fr}
+  .ai-api-grid,.ai-unification-controls{grid-template-columns:1fr}
+  .ai-api-grid label,.ai-api-grid .wide{grid-column:1/-1}
+  .ai-tabs button{justify-content:flex-start}
+  .taxonomy-preview-head{display:block}
+  .taxonomy-preview-head>span{display:block;margin-top:5px}
   .ai-task-head{display:block}
   .ai-task-head span{display:block;margin-top:4px}
   .ai-metrics{grid-template-columns:repeat(2,1fr)}

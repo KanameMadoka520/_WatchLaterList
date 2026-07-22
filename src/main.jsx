@@ -30,13 +30,17 @@ import {
 } from 'lucide-react';
 import {buildStandaloneHtml} from './exportStandaloneHtml';
 import {AiTaggingModal} from './AiTaggingModal';
+import {HelpButton, HelpDialog} from './HelpDialog';
 import {VirtualVideoGrid} from './VirtualVideoGrid';
 import './styles.css';
 import './features.css';
+import './headerEnhancements.css';
 
 const API = 'http://localhost:4175';
 const PAGE_SIZE = 48;
 const SCHEMA_VERSION = 2;
+const BROWSER_ITEMS_KEY = 'watchlater.items';
+const BROWSER_TAXONOMY_KEY = 'watchlater.taxonomy';
 const generatedCoverFields = [
   'cover',
   'coverOriginal',
@@ -47,19 +51,6 @@ const generatedCoverFields = [
   'coverFetchedAt',
   'coverError'
 ];
-const seed = [{
-  id: 'BV1AYMp6bE64',
-  title: '菲比啾比能在和糯糯绑在一起的情况下通关吗',
-  url: 'https://www.bilibili.com/list/watchlater/?bvid=BV1AYMp6bE64',
-  cover: '',
-  author: '桃天帝不差',
-  addedAt: '07-10',
-  views: '103.5万',
-  progress: '00:10/01:12',
-  tags: ['游戏', '娱乐'],
-  status: 'inbox'
-}];
-
 const remoteCoverCandidate = item => item.coverOriginal || (
   /^https?:\/\//i.test(item.cover || '') &&
   !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/i.test(item.cover)
@@ -88,6 +79,11 @@ const normalize = item => {
 
 const parseTags = value => [...new Set(String(value || '').split(/[\s,，、;；]+/u).map(tag => tag.trim()).filter(Boolean))];
 const parseKeywords = value => [...new Set(String(value || '').split(/[\r\n,，、;；]+/u).map(keyword => keyword.trim()).filter(Boolean))];
+const tagCountsOf = items => {
+  const counts = new Map();
+  for (const item of items) for (const tag of item.tags || []) counts.set(tag, (counts.get(tag) || 0) + 1);
+  return counts;
+};
 
 const downloadBlob = (name, content, type) => {
   const link = document.createElement('a');
@@ -187,6 +183,69 @@ const formatBytes = bytes => {
   return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
 };
 
+const browserCacheStats = () => {
+  const rawItems = localStorage.getItem(BROWSER_ITEMS_KEY) || '';
+  const rawTaxonomy = localStorage.getItem(BROWSER_TAXONOMY_KEY) || '';
+  let count = 0;
+  try {
+    const parsed = JSON.parse(rawItems || '[]');
+    count = Array.isArray(parsed) ? parsed.length : 0;
+  } catch {}
+  return {count, bytes: new Blob([rawItems, rawTaxonomy]).size};
+};
+
+const browserPortableItem = item => {
+  const {
+    coverData: _coverData,
+    coverFile: _coverFile,
+    coverMime: _coverMime,
+    coverBytes: _coverBytes,
+    coverSha256: _coverSha256,
+    coverFetchedAt: _coverFetchedAt,
+    ...portable
+  } = item;
+  const coverOriginal = originalCoverOf(item);
+  return {...portable, cover: coverOriginal, coverOriginal};
+};
+
+const APP_HELP = {
+  storage: {
+    title: '本地文件和浏览器缓存有什么区别？',
+    paragraphs: [
+      '本地文件模式把长期资料写进项目的 data/watchlater.json，并使用 data/covers 保存封面。浏览器缓存模式只把一份独立副本放进当前浏览器的 localStorage。',
+      '两种模式不会自动同步，所以视频数量不同是正常的。确定以后只使用本地文件时，可以清空浏览器缓存；这不会删除本地数据库，也不会删除 AI API 配置。'
+    ]
+  },
+  import: {
+    title: '导入 JSON 是做什么的？',
+    paragraphs: [
+      '导入会把扫描脚本或本项目导出的 JSON 合并进当前模式。当前是本地文件模式时，结果写入 data/watchlater.json；当前是浏览器缓存模式时，结果写入 localStorage。',
+      '相同 BV 号会合并，不会简单复制成两条。本地已有的封面、标签、备注和 AI 记录会尽量保留。'
+    ]
+  },
+  json: {
+    title: '两种 JSON 导出分别给谁用？',
+    paragraphs: [
+      '通用 JSON 是完整的数据交换文件，适合备份、迁移到另一份 Watchlater Atlas，或之后重新导入本地文件模式。',
+      '浏览器缓存包会去掉只有本机服务才能读取的 coverFile 等路径，保留原站 CDN 封面。把它导入“浏览器缓存”模式后，不启动本地数据服务也能联网浏览。'
+    ]
+  },
+  html: {
+    title: 'HTML 导出是做什么的？',
+    paragraphs: [
+      'HTML 是一个只读快照，双击文件就能搜索和浏览，不需要启动 4173/4175 服务。它适合归档和分享，不适合继续编辑资料库。',
+      '选择 CDN 封面时文件更小但需要联网；选择图片随 HTML 时可以离线看封面，但 Base64 会让文件明显变大。'
+    ]
+  },
+  bilistar: {
+    title: '导出到 BiliStar 是做什么的？',
+    paragraphs: [
+      '这个文件用于导入 BiliStar Video 收藏夹项目。它保留视频元数据、标签、关键词和 taxonomy，并把资料库类型改成 favorites。',
+      'Watchlater Atlas 不会移动或下载视频文件；本地视频绑定需要在 BiliStar Video 中继续操作。'
+    ]
+  }
+};
+
 function App() {
   const [mode, setMode] = useState(() => localStorage.getItem('watchlater.mode') || 'file');
   const [coverSource, setCoverSource] = useState(() => localStorage.getItem('watchlater.coverSource') || 'local');
@@ -205,6 +264,10 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [coverJob, setCoverJob] = useState(null);
   const [htmlExportOpen, setHtmlExportOpen] = useState(false);
+  const [dataExportOpen, setDataExportOpen] = useState(false);
+  const [cacheClearOpen, setCacheClearOpen] = useState(false);
+  const [appHelp, setAppHelp] = useState('');
+  const [cacheStats, setCacheStats] = useState(browserCacheStats);
   const [htmlImageMode, setHtmlImageMode] = useState('remote');
   const [htmlExporting, setHtmlExporting] = useState(false);
   const playerWindow = useRef(null);
@@ -220,10 +283,11 @@ function App() {
       const response = await fetch(`${API}/api/watchlater`);
       const data = await response.json();
       setTaxonomy(data.taxonomy || null);
-      setItems(data.items?.length ? data.items.map(normalize) : seed);
+      setItems((data.items || []).map(normalize));
     } catch {
-      setTaxonomy(JSON.parse(localStorage.getItem('watchlater.taxonomy') || 'null'));
-      setItems(JSON.parse(localStorage.getItem('watchlater.items') || 'null') || seed);
+      setTaxonomy(null);
+      setItems([]);
+      setNotice('本地数据服务不可用，没有改用浏览器缓存；请确认 4175 服务已经启动');
     }
   };
 
@@ -231,8 +295,8 @@ function App() {
     localStorage.setItem('watchlater.mode', mode);
     if (mode === 'file') loadFile();
     else {
-      setTaxonomy(JSON.parse(localStorage.getItem('watchlater.taxonomy') || 'null'));
-      setItems(JSON.parse(localStorage.getItem('watchlater.items') || 'null') || seed);
+      setTaxonomy(JSON.parse(localStorage.getItem(BROWSER_TAXONOMY_KEY) || 'null'));
+      setItems(JSON.parse(localStorage.getItem(BROWSER_ITEMS_KEY) || '[]'));
     }
   }, [mode]);
 
@@ -246,16 +310,28 @@ function App() {
 
   useEffect(() => {
     if (mode !== 'browser' || !items.length) return;
+    let idleId;
+    let fallbackId;
     const timeout = setTimeout(() => {
-      const write = () => localStorage.setItem('watchlater.items', JSON.stringify(items));
-      if ('requestIdleCallback' in window) window.requestIdleCallback(write, {timeout: 1500});
-      else setTimeout(write, 0);
+      const write = () => {
+        localStorage.setItem(BROWSER_ITEMS_KEY, JSON.stringify(items));
+        setCacheStats(browserCacheStats());
+      };
+      if ('requestIdleCallback' in window) idleId = window.requestIdleCallback(write, {timeout: 1500});
+      else fallbackId = setTimeout(write, 0);
     }, 500);
-    return () => clearTimeout(timeout);
+    return () => {
+      clearTimeout(timeout);
+      clearTimeout(fallbackId);
+      if (idleId && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleId);
+    };
   }, [items, mode]);
 
   useEffect(() => {
-    if (mode === 'browser') localStorage.setItem('watchlater.taxonomy', JSON.stringify(taxonomy));
+    if (mode === 'browser') {
+      localStorage.setItem(BROWSER_TAXONOMY_KEY, JSON.stringify(taxonomy));
+      setCacheStats(browserCacheStats());
+    }
   }, [taxonomy, mode]);
 
   useEffect(() => {
@@ -288,13 +364,15 @@ function App() {
     };
   }, [mode]);
 
-  const saveFileItems = async (next, taxonomyOverride = taxonomy) => {
+  const saveFileItems = async (next, taxonomyOverride = taxonomy, options = {}) => {
     const response = await fetch(`${API}/api/watchlater`, {
       method: 'PUT',
       headers: {'content-type': 'application/json'},
-      body: JSON.stringify({items: next, taxonomy: taxonomyOverride})
+      body: JSON.stringify({items: next, taxonomy: taxonomyOverride, createBackup: options.createBackup || ''})
     });
-    if (!response.ok) throw new Error((await response.json()).error || '本地数据库写入失败');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '本地数据库写入失败');
+    return data;
   };
 
   const persist = next => {
@@ -455,6 +533,39 @@ function App() {
     }
   };
 
+  const exportData = kind => {
+    const exportedAt = new Date().toISOString();
+    const base = {
+      version: SCHEMA_VERSION,
+      schema: 'bili-library/v2',
+      libraryType: 'watchlater',
+      exportedAt,
+      taxonomy
+    };
+    if (kind === 'browser-cache') {
+      downloadJson(`watchlater-browser-cache-${exportedAt.slice(0, 10)}.json`, {
+        ...base,
+        mode: 'browser',
+        storageHint: 'localStorage',
+        items: items.map(browserPortableItem)
+      });
+      setNotice(`已导出浏览器缓存包：${items.length} 条，封面使用原站 CDN 地址`);
+    } else {
+      downloadJson(`watchlater-${mode}-${exportedAt.slice(0, 10)}.json`, {...base, mode, items});
+      setNotice(`已导出通用 JSON：${items.length} 条`);
+    }
+    setDataExportOpen(false);
+  };
+
+  const clearBrowserCache = () => {
+    localStorage.removeItem(BROWSER_ITEMS_KEY);
+    localStorage.removeItem(BROWSER_TAXONOMY_KEY);
+    setCacheStats({count: 0, bytes: 0});
+    setCacheClearOpen(false);
+    if (mode === 'browser') setMode('file');
+    setNotice('浏览器缓存数据已经清空；本地文件、封面和 AI API 配置没有改变');
+  };
+
   const remove = id => persist(items.filter(item => item.id !== id));
   const update = (id, patch) => persist(items.map(item => item.id === id ? {...item, ...patch} : item));
   const beginEdit = item => {
@@ -538,7 +649,7 @@ function App() {
     itemsRef.current = next;
     setItems(next);
     if (mode === 'file') await saveFileItems(next);
-    else localStorage.setItem('watchlater.items', JSON.stringify(next));
+    else localStorage.setItem(BROWSER_ITEMS_KEY, JSON.stringify(next));
   };
 
   const applyAiConsolidation = async (plan, model) => {
@@ -577,10 +688,123 @@ function App() {
     itemsRef.current = next;
     setItems(next);
     if (mode === 'file') await saveFileItems(next);
-    else localStorage.setItem('watchlater.items', JSON.stringify(next));
+    else localStorage.setItem(BROWSER_ITEMS_KEY, JSON.stringify(next));
     const mappingCount = [...tagMap].filter(([from, to]) => from !== to).length;
     const finalVocabularySize = new Set(next.flatMap(item => item.tags || [])).size;
     return {changedItems, mappingCount, finalVocabularySize};
+  };
+
+  const applyAiTaxonomy = async (plan, model) => {
+    const canonicalNames = [...new Set((plan.canonicalTags || []).map(value => String(value?.name || value).trim()).filter(Boolean))];
+    const canonicalSet = new Set(canonicalNames);
+    if (canonicalNames.length !== plan.requestedTargetCount) {
+      throw new Error(`统一规格结果应为 ${plan.requestedTargetCount} 个标签，实际为 ${canonicalNames.length} 个`);
+    }
+    const sourceMap = new Map((plan.sourceMappings || []).map(mapping => [mapping.source, mapping.target]));
+    const sourceCounts = tagCountsOf(itemsRef.current);
+    const missingSources = [...sourceCounts.keys()].filter(source => !sourceMap.has(source));
+    const invalidTargets = [...sourceMap].filter(([, target]) => !canonicalSet.has(target));
+    if (missingSources.length || invalidTargets.length) {
+      throw new Error(`统一规格映射不完整：遗漏 ${missingSources.length} 个来源词，非法目标 ${invalidTargets.length} 个`);
+    }
+
+    const unifiedAt = new Date().toISOString();
+    const originalTagsByIndex = itemsRef.current.map(item => [...new Set(item.tags || [])]);
+    const next = itemsRef.current.map((item, index) => {
+      const tags = [...new Set(originalTagsByIndex[index].map(tag => sourceMap.get(tag)).filter(Boolean))].slice(0, 5);
+      if (!tags.length && canonicalNames.length) tags.push(canonicalNames[0]);
+      return normalize({
+        ...item,
+        tags,
+        keywords: [...new Set([...(item.keywords || []), ...originalTagsByIndex[index]])],
+        ai: {
+          ...(item.ai || {}),
+          taxonomyUnifiedAt: unifiedAt,
+          taxonomyModel: model,
+          taxonomyStrategy: 'ai-hierarchical-v1',
+          taxonomySummary: plan.summary || ''
+        }
+      });
+    });
+
+    const finalCounts = tagCountsOf(next);
+    const missingCanonical = canonicalNames.filter(name => !finalCounts.has(name));
+    for (const name of missingCanonical) {
+      const sourceNames = (plan.sourceMappings || []).filter(mapping => mapping.target === name).map(mapping => mapping.source);
+      let itemIndex = originalTagsByIndex.findIndex((tags, index) => tags.some(tag => sourceNames.includes(tag)) && next[index].tags.length < 5);
+      if (itemIndex < 0) {
+        itemIndex = originalTagsByIndex.findIndex(tags => tags.some(tag => sourceNames.includes(tag)));
+        if (itemIndex >= 0) {
+          const replaceIndex = next[itemIndex].tags.findIndex(tag => (finalCounts.get(tag) || 0) > 1);
+          if (replaceIndex >= 0) {
+            const removed = next[itemIndex].tags[replaceIndex];
+            next[itemIndex].tags.splice(replaceIndex, 1, name);
+            finalCounts.set(removed, finalCounts.get(removed) - 1);
+          } else itemIndex = -1;
+        }
+      } else next[itemIndex].tags.push(name);
+      if (itemIndex >= 0) finalCounts.set(name, 1);
+    }
+
+    const verifiedCounts = tagCountsOf(next);
+    const invalidItems = next.filter(item => !item.tags.length || item.tags.length > 5 || item.tags.some(tag => !canonicalSet.has(tag)));
+    if (verifiedCounts.size !== canonicalNames.length || invalidItems.length) {
+      throw new Error(`统一规格应用前验证失败：实际使用 ${verifiedCounts.size}/${canonicalNames.length} 个标签，异常视频 ${invalidItems.length} 条`);
+    }
+
+    const previousTaxonomy = taxonomy ? {
+      version: taxonomy.version,
+      strategy: taxonomy.strategy,
+      generatedAt: taxonomy.generatedAt,
+      finalUniqueTagCount: taxonomy.finalUniqueTagCount
+    } : null;
+    const nextTaxonomy = {
+      version: 'watchlater-controlled-tags/v2',
+      strategy: 'ai-hierarchical-v1',
+      generatedAt: unifiedAt,
+      requestedTargetCount: plan.requestedTargetCount,
+      sourceUniqueTagCount: sourceCounts.size,
+      finalUniqueTagCount: verifiedCounts.size,
+      rounds: plan.rounds || [],
+      summary: plan.summary || '',
+      model,
+      previousTaxonomy,
+      historicalSourceUniqueTagCount: taxonomy?.historicalSourceUniqueTagCount || taxonomy?.sourceUniqueTagCount || sourceCounts.size,
+      historicalSourceMappings: taxonomy?.historicalSourceMappings || taxonomy?.sourceMappings || [],
+      canonicalTags: canonicalNames.map(name => ({
+        name,
+        sourceUsageCount: (plan.canonicalTags || []).find(entry => (entry?.name || entry) === name)?.count || 0,
+        finalVideoCount: verifiedCounts.get(name) || 0
+      })),
+      sourceMappings: (plan.sourceMappings || []).map(mapping => ({
+        source: mapping.source,
+        count: mapping.count || sourceCounts.get(mapping.source) || 0,
+        targets: [mapping.target],
+        disposition: 'canonical_and_keyword'
+      }))
+    };
+
+    let backupFile = '';
+    if (mode === 'file') {
+      const saved = await saveFileItems(next, nextTaxonomy, {createBackup: 'ai-taxonomy-unification'});
+      backupFile = saved._write?.backupFile || '';
+    } else {
+      downloadJson(`watchlater-browser-before-ai-taxonomy-${unifiedAt.slice(0, 10)}.json`, {
+        version: SCHEMA_VERSION,
+        schema: 'bili-library/v2',
+        libraryType: 'watchlater',
+        exportedAt: unifiedAt,
+        taxonomy,
+        items: itemsRef.current
+      });
+      localStorage.setItem(BROWSER_ITEMS_KEY, JSON.stringify(next));
+      localStorage.setItem(BROWSER_TAXONOMY_KEY, JSON.stringify(nextTaxonomy));
+      setCacheStats(browserCacheStats());
+    }
+    itemsRef.current = next;
+    setItems(next);
+    setTaxonomy(nextTaxonomy);
+    return {finalVocabularySize: verifiedCounts.size, changedItems: next.length, backupFile};
   };
 
   const playerUrl = item => `https://www.bilibili.com/video/${encodeURIComponent(item.id)}/?spm_id_from=333.1007.0.0`;
@@ -641,16 +865,20 @@ function App() {
     <header>
       <div className="brand"><Database size={22}/><span>Watchlater Atlas</span></div>
       <div className="header-actions">
-        <div className="mode">
-          <button className={mode === 'file' ? 'active' : ''} onClick={() => setMode('file')}><HardDrive size={15}/>本地文件</button>
-          <button className={mode === 'browser' ? 'active' : ''} onClick={() => setMode('browser')}><MonitorDown size={15}/>浏览器</button>
+        <div className="header-tool mode-tool">
+          <div className="mode">
+            <button className={mode === 'file' ? 'active' : ''} onClick={() => setMode('file')}><HardDrive size={15}/>本地文件</button>
+            <button className={mode === 'browser' ? 'active' : ''} onClick={() => setMode('browser')}><MonitorDown size={15}/>浏览器缓存</button>
+          </div>
+          <HelpButton label="两种存储模式" onClick={() => setAppHelp('storage')}/>
         </div>
-        <label className={`button ${coverTaskLocked ? 'disabled' : ''}`} title={coverTaskLocked ? '请先暂停后停止封面任务，再导入新数据' : '导入 JSON'}><Upload size={16}/>导入<input type="file" accept=".json,.ndjson" disabled={coverTaskLocked} onChange={importFile}/></label>
-        <button className="button" onClick={() => downloadJson(`watchlater-${mode}.json`, {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'watchlater', mode, exportedAt: new Date().toISOString(), taxonomy, items})}><Download size={16}/>JSON</button>
-        <button className="button" onClick={() => downloadJson('bilistar-import.json', {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'favorites', exportedAt: new Date().toISOString(), taxonomy, items: items.map(item => ({...item, libraryType: 'favorites', status: item.status === 'archived' ? 'archived' : 'active', localMedia: null}))})}><FolderHeart size={16}/>导出到 BiliStar</button>
-        <button className="button" onClick={() => setHtmlExportOpen(true)}><FileDown size={16}/>HTML</button>
+        <div className="header-tool"><label className={`button ${coverTaskLocked ? 'disabled' : ''}`} title={coverTaskLocked ? '请先暂停后停止封面任务，再导入新数据' : '导入 JSON'}><Upload size={16}/>导入<input type="file" accept=".json,.ndjson" disabled={coverTaskLocked} onChange={importFile}/></label><HelpButton label="导入 JSON" onClick={() => setAppHelp('import')}/></div>
+        <div className="header-tool"><button className="button" onClick={() => setDataExportOpen(true)}><Download size={16}/>导出数据</button><HelpButton label="JSON 导出" onClick={() => setAppHelp('json')}/></div>
+        <div className="header-tool"><button className="button" onClick={() => downloadJson('bilistar-import.json', {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'favorites', exportedAt: new Date().toISOString(), taxonomy, items: items.map(item => ({...item, libraryType: 'favorites', status: item.status === 'archived' ? 'archived' : 'active', localMedia: null}))})}><FolderHeart size={16}/>BiliStar</button><HelpButton label="导出到 BiliStar" onClick={() => setAppHelp('bilistar')}/></div>
+        <div className="header-tool"><button className="button" onClick={() => setHtmlExportOpen(true)}><FileDown size={16}/>HTML</button><HelpButton label="HTML 导出" onClick={() => setAppHelp('html')}/></div>
         <button className="button" disabled={coverTaskLocked} onClick={() => setAiOpen(true)}><Bot size={16}/>AI 标签</button>
         {mode === 'file' && <button className="button" disabled={busy || coverTaskLocked} onClick={() => enrich()}><ImageDown size={16}/>补全封面</button>}
+        <button className="button cache-clear-button" disabled={!cacheStats.count} onClick={() => setCacheClearOpen(true)} title={`清空独立的浏览器缓存副本，共 ${cacheStats.count} 条`}><Trash2 size={16}/>清理缓存</button>
         <button className="button primary" disabled={coverTaskLocked} onClick={add}><Plus size={16}/>新增</button>
       </div>
     </header>
@@ -660,7 +888,7 @@ function App() {
         <div>
           <p className="eyebrow">PERSONAL VIDEO LIBRARY</p>
           <h1>把稍后再看，变成真正可整理的知识库。</h1>
-          <p className="sub">当前模式：{mode === 'file' ? '本地 JSON 索引 + data/covers 分层封面目录' : '浏览器 localStorage'}。封面显示：{coverSource === 'local' ? '本地优先' : '原站 CDN'}。</p>
+          <p className="sub">当前模式：{mode === 'file' ? '本地 JSON 索引 + data/covers 分层封面目录' : '浏览器缓存（localStorage 独立副本）'}。封面显示：{coverSource === 'local' ? '本地优先' : '原站 CDN'}。</p>
         </div>
         <div className="stats"><b>{items.length}</b><span>条视频</span><b>{items.filter(item => item.coverFile).length}</b><span>本地封面</span></div>
       </section>
@@ -722,6 +950,30 @@ function App() {
       <button title="关闭 Bilibili 窗口" onClick={closePlayer}><X size={17}/></button>
     </div>}
 
+    {dataExportOpen && <div className="overlay">
+      <div className="modal export-modal">
+        <div className="modal-head"><div><h2>导出数据</h2><p>选择文件之后准备在哪里使用。</p></div><button title="关闭" onClick={() => setDataExportOpen(false)}><X size={18}/></button></div>
+        <div className="export-options">
+          <button className="export-choice" onClick={() => exportData('portable')}>
+            <Database size={22}/><span><strong>通用 JSON</strong><small>完整保留当前字段，适合备份、迁移和重新导入本地文件模式。</small></span>
+          </button>
+          <button className="export-choice" onClick={() => exportData('browser-cache')}>
+            <MonitorDown size={22}/><span><strong>浏览器缓存包</strong><small>去掉本机封面路径，保留 CDN 地址；导入浏览器缓存模式即可读取。</small></span>
+          </button>
+        </div>
+        <div className="export-summary"><b>{items.length}</b><span>条视频</span><b>{taxonomy?.canonicalTags?.length || tags.length - 1}</b><span>个规范标签</span></div>
+      </div>
+    </div>}
+
+    {cacheClearOpen && <div className="overlay">
+      <div className="modal confirm-modal">
+        <div className="modal-head"><div><h2>清空浏览器缓存副本</h2><p>只删除当前站点 localStorage 里的视频数据。</p></div><button title="关闭" onClick={() => setCacheClearOpen(false)}><X size={18}/></button></div>
+        <div className="cache-clear-summary"><b>{cacheStats.count}</b><span>条缓存视频</span><b>{formatBytes(cacheStats.bytes)}</b><span>预计占用</span></div>
+        <p className="confirm-copy">本地 `data/watchlater.json`、`data/covers` 和 AI API 配置不会删除。清理后如果当前正在查看浏览器缓存，页面会自动切回本地文件模式。</p>
+        <div className="modal-actions"><button className="button" onClick={() => setCacheClearOpen(false)}>取消</button><button className="button danger-button" onClick={clearBrowserCache}><Trash2 size={16}/>确认清空</button></div>
+      </div>
+    </div>}
+
     {htmlExportOpen && <div className="overlay">
       <div className="modal export-modal">
         <div className="modal-head"><div><h2>导出单文件 HTML</h2><p>导出全部 {items.length} 条视频，之后可以直接双击打开。</p></div><button title="关闭" onClick={() => !htmlExporting && setHtmlExportOpen(false)}><X size={18}/></button></div>
@@ -748,9 +1000,14 @@ function App() {
       taxonomy={taxonomy}
       onApplyBatch={applyAiBatch}
       onApplyConsolidation={applyAiConsolidation}
+      onApplyTaxonomy={applyAiTaxonomy}
       onClose={() => setAiOpen(false)}
-      storageLabel={mode === 'file' ? 'data/watchlater.json' : '当前站点 localStorage'}
+      storageLabel={mode === 'file' ? 'data/watchlater.json' : '当前站点浏览器缓存'}
     />
+
+    {APP_HELP[appHelp] && <HelpDialog title={APP_HELP[appHelp].title} onClose={() => setAppHelp('')}>
+      {APP_HELP[appHelp].paragraphs.map(paragraph => <p key={paragraph}>{paragraph}</p>)}
+    </HelpDialog>}
 
     {editing && <div className="overlay"><div className="modal">
       <div className="modal-head"><h2>{editing.id ? '编辑视频' : '新增视频'}</h2><button title="关闭" onClick={() => setEditing(null)}><X size={18}/></button></div>

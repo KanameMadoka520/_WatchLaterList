@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 const root = process.cwd();
 const dataDir = path.join(root, 'data');
 const coversDir = path.join(dataDir, 'covers');
+const backupsDir = path.join(dataDir, 'backups');
 const dbFile = path.join(dataDir, 'watchlater.json');
 await fs.mkdir(coversDir, {recursive: true});
 try {
@@ -147,12 +148,20 @@ const readBody = req => new Promise((resolve, reject) => {
 
 const readDb = async () => normalizeDatabase(JSON.parse(await fs.readFile(dbFile, 'utf8')));
 let dbWriteQueue = Promise.resolve();
-const writeDb = (items, metadata = {}) => {
+const writeDb = (items, metadata = {}, options = {}) => {
   const operation = dbWriteQueue.catch(() => {}).then(async () => {
     let existing = {};
     try {
       existing = JSON.parse(await fs.readFile(dbFile, 'utf8'));
     } catch {}
+    let backupFile = '';
+    if (options.createBackup && Array.isArray(existing.items)) {
+      await fs.mkdir(backupsDir, {recursive: true});
+      const reason = String(options.createBackup).replace(/[^a-z0-9-]+/gi, '-').replace(/^-|-$/g, '') || 'manual';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      backupFile = path.join(backupsDir, `watchlater-before-${reason}-${stamp}.json`);
+      await fs.writeFile(backupFile, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
+    }
     const output = {
       ...existing,
       ...metadata,
@@ -165,7 +174,9 @@ const writeDb = (items, metadata = {}) => {
     const temporary = `${dbFile}.tmp`;
     await fs.writeFile(temporary, JSON.stringify(output, null, 2));
     await fs.rename(temporary, dbFile);
-    return output;
+    return options.includeWriteMeta && backupFile
+      ? {...output, _write: {backupFile: path.relative(root, backupFile).replaceAll('\\', '/')}}
+      : output;
   });
   dbWriteQueue = operation;
   return operation;
@@ -475,7 +486,10 @@ const server = http.createServer(async (req, res) => {
       const incoming = Array.isArray(body.items) ? body.items : [];
       const existing = await readDb();
       const metadata = body.taxonomy ? {taxonomy: body.taxonomy} : {};
-      return sendJson(res, 200, await writeDb(mergeIncomingWithLocalCovers(existing.items, incoming), metadata));
+      const options = body.createBackup
+        ? {createBackup: body.createBackup, includeWriteMeta: true}
+        : {};
+      return sendJson(res, 200, await writeDb(mergeIncomingWithLocalCovers(existing.items, incoming), metadata, options));
     }
 
     if (url.pathname === '/api/ai-proxy' && req.method === 'POST') return await proxyAiRequest(req, res);
