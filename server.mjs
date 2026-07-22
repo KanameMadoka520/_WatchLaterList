@@ -51,6 +51,50 @@ const sendJson = (res, status, data) => {
   res.end(JSON.stringify(data));
 };
 
+const validateAiEndpoint = value => {
+  const endpoint = new URL(value);
+  const hostname = endpoint.hostname.toLowerCase();
+  const privateHostname = hostname === 'localhost'
+    || hostname === '::1'
+    || hostname.endsWith('.local')
+    || /^127\./.test(hostname)
+    || /^10\./.test(hostname)
+    || /^192\.168\./.test(hostname)
+    || /^169\.254\./.test(hostname)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(hostname);
+  if (endpoint.protocol !== 'https:') throw new Error('AI API 地址必须使用 HTTPS');
+  if (endpoint.username || endpoint.password) throw new Error('AI API 地址不能包含用户名或密码');
+  if (privateHostname) throw new Error('AI API 地址不能指向本机或私有网络');
+  return endpoint;
+};
+
+const proxyAiRequest = async (req, res) => {
+  const request = await readBody(req);
+  let endpoint;
+  try {
+    endpoint = validateAiEndpoint(request.endpoint);
+  } catch (error) {
+    return sendJson(res, 400, {error: error.message});
+  }
+  if (!request.apiKey) return sendJson(res, 400, {error: '缺少 API Key'});
+  if (!request.body || typeof request.body !== 'object') return sendJson(res, 400, {error: '缺少 AI 请求体'});
+
+  const upstream = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${request.apiKey}`
+    },
+    body: JSON.stringify(request.body)
+  });
+  const bytes = Buffer.from(await upstream.arrayBuffer());
+  res.writeHead(upstream.status, {
+    ...corsHeaders,
+    'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8'
+  });
+  res.end(bytes);
+};
+
 const readBody = req => new Promise((resolve, reject) => {
   let body = '';
   req.on('data', chunk => { body += chunk; });
@@ -388,6 +432,8 @@ const server = http.createServer(async (req, res) => {
       const existing = await readDb();
       return sendJson(res, 200, await writeDb(mergeIncomingWithLocalCovers(existing.items, incoming)));
     }
+
+    if (url.pathname === '/api/ai-proxy' && req.method === 'POST') return await proxyAiRequest(req, res);
 
     if (url.pathname === '/api/cover-job' && req.method === 'GET') return sendJson(res, 200, publicCoverJob());
     if ((url.pathname === '/api/cover-job/start' || url.pathname === '/api/enrich-covers') && req.method === 'POST') {

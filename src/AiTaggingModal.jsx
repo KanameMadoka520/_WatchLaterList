@@ -2,6 +2,7 @@ import React, {useMemo, useRef, useState} from 'react';
 import {Bot, KeyRound, Pause, Play, Save, Square, X} from 'lucide-react';
 
 const STORAGE_KEY = 'watchlater.ai.config';
+const LOCAL_AI_PROXY = 'http://localhost:4175/api/ai-proxy';
 const defaultConfig = {
   protocol: 'responses',
   endpoint: 'https://api.openai.com/v1/responses',
@@ -141,10 +142,14 @@ export function AiTaggingModal({open, allItems, filteredItems, existingTags, onA
         {role: 'user', content: prompt}
       ]
     };
-    const send = () => fetch(activeConfig.endpoint, {
+    const send = () => fetch(LOCAL_AI_PROXY, {
       method: 'POST',
-      headers: {'content-type': 'application/json', authorization: `Bearer ${activeConfig.apiKey}`},
-      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({
+        endpoint: activeConfig.endpoint,
+        apiKey: activeConfig.apiKey,
+        body
+      }),
       signal
     });
     let response = await send();
@@ -268,7 +273,7 @@ export function AiTaggingModal({open, allItems, filteredItems, existingTags, onA
 
   return <div className="overlay"><div className="modal ai-modal">
     <div className="modal-head"><div><h2><Bot size={20}/>AI 分类任务</h2><p>配置只保存在当前浏览器；视频元数据按批发送，封面图片不会发送。</p></div><button title="关闭" disabled={active} onClick={onClose}><X size={18}/></button></div>
-    <div className="ai-key-note"><KeyRound size={17}/><span>API Key 保存于 localStorage 的 <code>{STORAGE_KEY}</code>，不会写入导出 JSON 或本地数据库。共享电脑不建议保存长期密钥。</span></div>
+    <div className="ai-key-note"><KeyRound size={17}/><span>请求通过本机 4175 服务转发。API Key 保存于 localStorage 的 <code>{STORAGE_KEY}</code>，不会写入导出 JSON、本地数据库或服务日志。共享电脑不建议保存长期密钥。</span></div>
     <div className="ai-form">
       <label>API 协议<select value={config.protocol} onChange={event => {
         const protocol = event.target.value;
