@@ -79,20 +79,57 @@ const proxyAiRequest = async (req, res) => {
   if (!request.apiKey) return sendJson(res, 400, {error: '缺少 API Key'});
   if (!request.body || typeof request.body !== 'object') return sendJson(res, 400, {error: '缺少 AI 请求体'});
 
-  const upstream = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${request.apiKey}`
-    },
-    body: JSON.stringify(request.body)
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
   });
-  const bytes = Buffer.from(await upstream.arrayBuffer());
-  res.writeHead(upstream.status, {
-    ...corsHeaders,
-    'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8'
-  });
-  res.end(bytes);
+  try {
+    const upstream = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        accept: request.body.stream ? 'text/event-stream' : 'application/json',
+        'content-type': 'application/json',
+        authorization: `Bearer ${request.apiKey}`
+      },
+      body: JSON.stringify(request.body),
+      signal: controller.signal
+    });
+    const contentType = upstream.headers.get('content-type') || 'application/json; charset=utf-8';
+    const streaming = contentType.includes('text/event-stream');
+    res.writeHead(upstream.status, {
+      ...corsHeaders,
+      'content-type': contentType,
+      'cache-control': streaming ? 'no-cache, no-transform' : (upstream.headers.get('cache-control') || 'no-store'),
+      'x-accel-buffering': 'no'
+    });
+    res.flushHeaders?.();
+    const heartbeat = streaming ? setInterval(() => {
+      if (!res.writableEnded && !res.destroyed) res.write(`: relay-heartbeat ${Date.now()}\n\n`);
+    }, 15000) : null;
+    try {
+      if (upstream.body) {
+        for await (const chunk of upstream.body) {
+          if (res.destroyed) break;
+          if (!res.write(Buffer.from(chunk))) await new Promise(resolve => {
+            const done = () => {
+              res.off('drain', done);
+              res.off('close', done);
+              resolve();
+            };
+            res.once('drain', done);
+            res.once('close', done);
+          });
+        }
+      }
+      if (!res.writableEnded && !res.destroyed) res.end();
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
+  } catch (error) {
+    if (error.name === 'AbortError' || res.destroyed) return;
+    if (!res.headersSent) return sendJson(res, 502, {error: `AI 转发失败：${error.message}`});
+    if (!res.writableEnded) res.end();
+  }
 };
 
 const readBody = req => new Promise((resolve, reject) => {

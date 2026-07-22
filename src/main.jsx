@@ -492,10 +492,13 @@ function App() {
         topics: result.topics,
         collections: result.collections,
         ai: {
+          ...(item.ai || {}),
           status: 'completed',
           model,
           processedAt,
-          reason: result.reason
+          reason: result.reason,
+          mode: 'classify',
+          tagStrategy: 'merge'
         }
       });
     });
@@ -503,6 +506,47 @@ function App() {
     setItems(next);
     if (mode === 'file') await saveFileItems(next);
     else localStorage.setItem('watchlater.items', JSON.stringify(next));
+  };
+
+  const applyAiConsolidation = async (plan, model) => {
+    const mapOf = mappings => new Map((mappings || []).map(mapping => [mapping.from, mapping.to]));
+    const tagMap = mapOf(plan.tagMappings);
+    const resolve = (value, mapping) => {
+      let current = value;
+      const seen = new Set([current]);
+      while (mapping.has(current)) {
+        const next = mapping.get(current);
+        if (!next || next === current) return current;
+        if (seen.has(next)) return value;
+        seen.add(next);
+        current = next;
+      }
+      return current;
+    };
+    const mapList = (values, mapping) => [...new Set((values || []).map(value => resolve(value, mapping)).filter(Boolean))];
+    const consolidatedAt = new Date().toISOString();
+    let changedItems = 0;
+    const next = itemsRef.current.map(item => {
+      const tags = mapList(item.tags, tagMap);
+      const changed = JSON.stringify(tags) !== JSON.stringify(item.tags || []);
+      if (changed) changedItems++;
+      return normalize({
+        ...item,
+        tags,
+        ai: {
+          ...(item.ai || {}),
+          consolidatedAt,
+          consolidationModel: model,
+          consolidationSummary: plan.summary || ''
+        }
+      });
+    });
+    itemsRef.current = next;
+    setItems(next);
+    if (mode === 'file') await saveFileItems(next);
+    else localStorage.setItem('watchlater.items', JSON.stringify(next));
+    const mappingCount = [...tagMap].filter(([from, to]) => from !== to).length;
+    return {changedItems, mappingCount};
   };
 
   const playerUrl = item => `https://www.bilibili.com/video/${encodeURIComponent(item.id)}/?spm_id_from=333.1007.0.0`;
@@ -667,8 +711,8 @@ function App() {
       open={aiOpen}
       allItems={items}
       filteredItems={filtered}
-      existingTags={tags}
       onApplyBatch={applyAiBatch}
+      onApplyConsolidation={applyAiConsolidation}
       onClose={() => setAiOpen(false)}
       storageLabel={mode === 'file' ? 'data/watchlater.json' : '当前站点 localStorage'}
     />
