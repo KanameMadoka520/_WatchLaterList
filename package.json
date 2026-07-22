@@ -1,0 +1,1 @@
+{"scripts":{"start":"concurrently -k \"node server.mjs\" \"vite --host 0.0.0.0\"","api":"node server.mjs","export:bilibili":"node tools/bilibili-watchlater-export.mjs"},"dependencies":{"@tanstack/react-virtual":"^3.14.7","@vitejs/plugin-react":"latest","concurrently":"^9.2.4","lucide-react":"latest","playwright":"latest","react":"latest","react-dom":"latest","vite":"latest"}}

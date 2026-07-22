@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+
+# Personal library data, downloaded covers, and browser profiles.
+data/*
+!data/.gitkeep
+
+# Local editor and operating-system metadata.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
