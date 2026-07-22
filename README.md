@@ -35,17 +35,16 @@ Watchlater Atlas 将这些职责拆分为采集、导入、封面本地化、人
 ## 整体架构
 
 ```mermaid
-flowchart LR
-    A["已登录的 Bilibili 稍后再看页面"] -->|"F12 采集脚本"| B["bilibili-watchlater-export.json"]
-    B --> C["Watchlater Atlas 前端 :4173"]
-    C --> D["本地数据 API :4175"]
-    D --> E["data/watchlater.json"]
-    D --> F["data/covers/BV前缀/BV号.扩展名"]
-    C --> G["AI Responses / Chat Completions API"]
-    G -->|"规范化分类结果"| C
-    C -->|"每批立即保存"| D
-    C --> H["Bilibili 完整网页播放窗口"]
-    C --> I["JSON / HTML / BiliStar 导出"]
+flowchart TB
+    A["Bilibili 稍后再看<br/>已登录页面"] -->|"F12 扫描"| B["导出 JSON<br/>bilibili-watchlater-export.json"]
+    B --> C["Watchlater Atlas<br/>前端 :4173"]
+    C -->|"读取 / 每批保存"| D["本地数据 API<br/>:4175"]
+    D --> E["元数据索引<br/>data/watchlater.json"]
+    D --> F["本地封面<br/>data/covers/BV前缀/..."]
+    C --> G["AI API<br/>Responses / Chat Completions"]
+    G -->|"结构化分类结果"| C
+    C --> H["Bilibili 播放<br/>完整网页窗口"]
+    C --> I["可移植导出<br/>JSON / HTML / BiliStar"]
 ```
 
 采集脚本只负责列表页能够直接取得的数据。封面二进制下载、哈希计算、目录索引和 JSON 持久化由本地 `4175` 服务负责；AI 请求由浏览器直接发送，因此 API Key 不经过本地服务端。
@@ -204,25 +203,25 @@ API Key 不会写入 `data/watchlater.json`、导出 JSON 或本地服务端。�
 
 ```mermaid
 flowchart TD
-    A["用户选择处理范围"] --> B["筛选未处理 / 当前结果 / 全部视频"]
-    B --> C["按照 batchSize 切片，默认每批 20 条"]
-    C --> D["只提取允许发送的文本元数据"]
+    A["用户选择<br/>处理范围"] --> B["筛选范围<br/>未处理 / 当前结果 / 全部"]
+    B --> C["按 batchSize 切片<br/>默认每批 20 条"]
+    C --> D["提取允许发送的<br/>文本元数据"]
     D --> E{"API 协议"}
-    E -->|"Responses"| F["instructions + input + text.format.json_schema"]
-    E -->|"Chat Completions"| G["messages + response_format.json_object"]
-    F --> H{"严格 Schema 是否被服务支持"}
-    H -->|"支持"| I["接收 Responses output_text"]
-    H -->|"返回 400 / 422"| J["降级为 text.format.json_object 后重试"]
+    E -->|"Responses"| F["Responses 请求<br/>instructions + input<br/>text.format.json_schema"]
+    E -->|"Chat Completions"| G["Chat Completions 请求<br/>messages + response_format"]
+    F --> H{"服务是否支持<br/>严格 Schema？"}
+    H -->|"支持"| I["读取 Responses 响应<br/>output_text"]
+    H -->|"400 / 422"| J["降级为 json_object<br/>重新请求"]
     J --> I
-    G --> K["接收 choices[0].message.content"]
-    I --> L["去除 Markdown 代码围栏并执行 JSON.parse"]
+    G --> K["读取 Chat 响应<br/>message.content"]
+    I --> L["去除代码围栏<br/>执行 JSON.parse"]
     K --> L
-    L --> M{"本地契约校验"}
-    M -->|"不合格"| N["整批标记失败，显示错误，不写入数据"]
-    M -->|"合格"| O["过滤非法 BV 号、清洗数组、去重和限制数量"]
-    O --> P["与人工标签合并，写入 category/topics/collections/ai"]
-    P --> Q["本地文件模式写入 data/watchlater.json"]
-    P --> R["浏览器模式写入 watchlater.items"]
+    L --> M{"本地契约<br/>校验"}
+    M -->|"不合格"| N["整批失败<br/>显示错误<br/>不写入数据"]
+    M -->|"合格"| O["过滤非法 BV 号<br/>清洗、去重、限制数量"]
+    O --> P["合并人工标签<br/>写入分类与 AI 记录"]
+    P --> Q["本地文件模式<br/>data/watchlater.json"]
+    P --> R["浏览器模式<br/>watchlater.items"]
     Q --> S{"还有下一批？"}
     R --> S
     S -->|"有"| C
