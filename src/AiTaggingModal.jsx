@@ -50,7 +50,7 @@ const statusLabels = {
   idle: '尚未开始', running: '处理中', pausing: '正在暂停', paused: '已暂停',
   stopping: '正在停止', stopped: '已停止', completed: '已完成', failed: '失败'
 };
-const modeLabels = {classify: '增量分类', consolidate: '全局归核'};
+const modeLabels = {classify: '增量分类', consolidate: '同义归核'};
 const formatBytes = bytes => bytes >= 1024 * 1024
   ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
   : `${(bytes / 1024).toFixed(1)} KB`;
@@ -71,12 +71,13 @@ const responseSchema = {
         properties: {
           id: {type: 'string'},
           tags: {type: 'array', items: {type: 'string'}},
+          keywords: {type: 'array', items: {type: 'string'}},
           category: {type: 'string'},
           topics: {type: 'array', items: {type: 'string'}},
           collections: {type: 'array', items: {type: 'string'}},
           reason: {type: 'string'}
         },
-        required: ['id', 'tags', 'category', 'topics', 'collections', 'reason'],
+        required: ['id', 'tags', 'keywords', 'category', 'topics', 'collections', 'reason'],
         additionalProperties: false
       }
     }
@@ -277,13 +278,13 @@ const consolidationChunksOf = (vocabulary, threshold, chunkSize) => {
   return chunks;
 };
 
-export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onApplyConsolidation, onClose, storageLabel}) {
+export function AiTaggingModal({open, allItems, filteredItems, taxonomy, onApplyBatch, onApplyConsolidation, onClose, storageLabel}) {
   const [config, setConfig] = useState(loadConfig);
   const [helpTopic, setHelpTopic] = useState('');
   const [task, setTask] = useState({
     mode: 'classify', status: 'idle', total: 0, completed: 0, succeeded: 0, failed: 0,
     batch: 0, batches: 0, currentBatches: [], currentIds: [], vocabularySize: 0,
-    streamEvents: 0, responseBytes: 0, lastActivityAt: '', startedAt: '', usage: emptyUsage(),
+    streamEvents: 0, responseBytes: 0, lastActivityAt: '', startedAt: '', finishedAt: '', usage: emptyUsage(),
     lastMessage: '', lastError: ''
   });
   const [clock, setClock] = useState(Date.now());
@@ -304,6 +305,9 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
   }, [allItems, filteredItems, config.scope]);
   const currentVocabularySize = useMemo(() => tagCountsOf(allItems).size, [allItems]);
   const currentGlobalVocabulary = useMemo(() => globalVocabularyOf(allItems), [allItems]);
+  const lockedCanonicalTags = useMemo(() => (taxonomy?.canonicalTags || [])
+    .map(entry => typeof entry === 'string' ? entry : entry?.name)
+    .filter(Boolean), [taxonomy]);
 
   useEffect(() => {
     if (!['running', 'pausing', 'stopping'].includes(task.status)) return undefined;
@@ -353,22 +357,28 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
   };
 
   const requestBatch = async (batch, activeConfig, signal) => {
-    const knownTags = sortedTagEntries(tagCountsRef.current, 160).map(entry => entry.name);
+    const knownTags = lockedCanonicalTags.length
+      ? lockedCanonicalTags
+      : sortedTagEntries(tagCountsRef.current, 160).map(entry => entry.name);
     const payloadItems = batch.map(item => ({
       id: item.id,
       title: item.title,
       author: item.author || '',
       description: item.description || '',
       currentTags: item.tags || [],
+      currentKeywords: item.keywords || [],
       currentCategory: item.category || '',
       note: item.note || ''
     }));
     const prompt = [
       '你是视频资料库分类器。必须只返回 JSON，不要 Markdown。',
       `已有标签词表（任务运行中持续更新）：${JSON.stringify(knownTags)}`,
+      lockedCanonicalTags.length
+        ? '当前资料库已经锁定受控词表。tags 只能从已有标签词表中选择；更具体的人名、作品名、软件名、技术名和长尾描述必须放入 keywords，禁止创造新主标签。'
+        : '当前资料库尚未锁定受控词表，可以生成新的简洁标签。',
       `附加规则：${activeConfig.instructions}`,
       '每个 items 元素代表相互独立的视频。只能依据该元素自身字段分类，不得借用同一批其他视频的内容推断或复制标签。',
-      '返回格式：{"items":[{"id":"BV号","tags":["标签"],"category":"主分类","topics":["主题"],"collections":["建议收藏夹"],"reason":"一句简短依据"}]}。',
+      '返回格式：{"items":[{"id":"BV号","tags":["受控标签"],"keywords":["详细关键词"],"category":"主分类","topics":["主题"],"collections":["建议收藏夹"],"reason":"一句简短依据"}]}。',
       '不得遗漏输入 id，不得修改 id；标签去重，不要把播放量、作者名或“视频”当作标签。',
       `待处理数据：${JSON.stringify(payloadItems)}`
     ].join('\n');
@@ -423,9 +433,11 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       : 'Chat Completions 响应中没有 choices[0].message.content');
     const parsed = JSON.parse(cleanJson(content));
     const allowed = new Set(batch.map(item => item.id));
+    const lockedSet = lockedCanonicalTags.length ? new Set(lockedCanonicalTags) : null;
     const results = (parsed.items || []).filter(item => allowed.has(item.id)).map(item => ({
       id: item.id,
-      tags: cleanList(item.tags, 8),
+      tags: cleanList(item.tags, 8).filter(tag => !lockedSet || lockedSet.has(tag)),
+      keywords: cleanList(item.keywords, 12),
       category: String(item.category || '').trim(),
       topics: cleanList(item.topics, 5),
       collections: cleanList(item.collections, 5),
@@ -439,7 +451,7 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
     const strengthRule = {
       conservative: '只合并确定无疑的同义词、缩写、语言和格式变体。',
       balanced: '在明确同义之外，也合并不会损失检索意图的冗余近义名称。',
-      aggressive: '目标是形成尽量精简、稳定、可复用的词表；除非概念确实不同，否则把可互换的近义、上下位冗余和重复复合名称归到更通用的规范名。'
+      aggressive: '除明确同义外，也允许把可安全替换且不损失检索意图的上下位冗余和重复复合名称归到已有规范名。'
     }[activeConfig.consolidationStrength];
     const prompt = [
       '你是视频资料库的全局命名归核器。必须只返回 JSON，不要 Markdown。',
@@ -448,6 +460,9 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       '把大小写、语言差异、缩写、字符损坏、明确同义和可安全替换的冗余名称映射到同一个规范名称；优先保留使用次数高、含义清楚、便于中文检索的已有名称。',
       '不要合并只是相关但检索意图不同的概念。只返回确实需要改变的映射，不要返回 from 与 to 相同的自映射；未返回的标签会在本地原样保留。',
       'from 只能来自“本片待归核词汇”；“跨片规范锚点”只能帮助保持命名一致，可以作为 to，但不能作为 from。',
+      lockedCanonicalTags.length
+        ? '受控词表已经锁定，to 必须是现有规范标签，禁止创造新名称；已经属于受控词表的 from 不得再映射到其他规范标签。本任务只收编词表外历史别名，不负责压缩到目标数量。'
+        : '受控词表尚未锁定，优先使用已有高频名称。',
       '返回格式：{"tagMappings":[{"from":"旧标签","to":"规范标签","reason":"依据"}],"summary":"归核摘要"}。',
       `跨片规范锚点及累计次数：${JSON.stringify(anchors)}`,
       `本片待归核词汇及使用次数：${JSON.stringify(vocabulary)}`
@@ -500,12 +515,13 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
     const parsed = JSON.parse(cleanJson(content));
     const cleanMappings = (value, entries) => {
       const allowed = new Set(entries.map(entry => entry.name));
+      const allowedTargets = lockedCanonicalTags.length ? new Set(lockedCanonicalTags) : null;
       const seen = new Set();
       const mappings = [];
       for (const mapping of Array.isArray(value) ? value : []) {
         const from = String(mapping?.from || '').trim();
         const to = String(mapping?.to || '').trim().slice(0, 80);
-        if (!allowed.has(from) || !to || seen.has(from)) continue;
+        if (!allowed.has(from) || !to || seen.has(from) || (allowedTargets && (!allowedTargets.has(to) || allowedTargets.has(from)))) continue;
         seen.add(from);
         mappings.push({from, to, reason: String(mapping.reason || '').trim()});
       }
@@ -600,12 +616,13 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       setTask(current => ({
         ...current,
         status: stopRef.current ? 'stopped' : pauseRef.current ? 'paused' : 'completed',
+        finishedAt: pauseRef.current ? '' : new Date().toISOString(),
         currentBatches: [],
         currentIds: [],
         lastMessage: !stopRef.current && !pauseRef.current
           ? current.succeeded
-            ? '增量分类已完成。由于运行时复用无法保证全局统一，建议现在执行一次“全局归核”来合并同义标签。'
-            : '增量分类已结束，但没有成功保存任何结果。请先检查错误，不要立即执行全局归核。'
+            ? '增量分类已完成。受控词表模式不会产生新主标签；如仍有历史同义名称，可执行一次“同义归核”。'
+            : '增量分类已结束，但没有成功保存任何结果。请先检查错误，不要立即执行同义归核。'
           : current.lastMessage
       }));
     } finally {
@@ -645,6 +662,7 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       responseBytes: 0,
       lastActivityAt: '',
       startedAt,
+      finishedAt: queueRef.current.length ? '' : startedAt,
       usage: emptyUsage(),
       lastMessage: queueRef.current.length
         ? `已建立 ${batches} 个批次，并发 ${activeConfig.concurrency}`
@@ -683,7 +701,7 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       mode: 'consolidate', status: 'running', total: vocabularySize, completed: 0,
       succeeded: 0, failed: 0, batch: 0, batches: chunks.length, currentBatches: [1], currentIds: [],
       vocabularySize,
-      streamEvents: 0, responseBytes: 0, lastActivityAt: '', startedAt, usage: emptyUsage(),
+      streamEvents: 0, responseBytes: 0, lastActivityAt: '', startedAt, finishedAt: '', usage: emptyUsage(),
       lastMessage: chunks.length === 1
         ? `正在归核 ${vocabularySize} 个全库词汇`
         : `已切成 ${chunks.length} 片，将按顺序归核；每片最多 ${activeConfig.consolidationChunkSize} 个来源词`,
@@ -739,18 +757,20 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       setTask(current => ({
         ...current,
         status: 'completed',
+        finishedAt: new Date().toISOString(),
         completed: vocabularySize,
         succeeded: vocabularySize,
         batch: chunks.length,
         currentBatches: [],
-        lastMessage: `全局归核完成：应用 ${result.mappingCount} 条映射，更新 ${result.changedItems} 个视频，已保存到${storageLabel}`,
+        vocabularySize: result.finalVocabularySize,
+        lastMessage: `同义归核完成：词表 ${vocabularySize} -> ${result.finalVocabularySize}，应用 ${result.mappingCount} 条映射，更新 ${result.changedItems} 个视频，已保存到${storageLabel}`,
         lastError: ''
       }));
     } catch (error) {
       if (error.name === 'AbortError' && stopRef.current) {
-        setTask(current => ({...current, status: 'stopped', currentBatches: [], lastMessage: '全局归核已停止，未应用映射'}));
+        setTask(current => ({...current, status: 'stopped', finishedAt: new Date().toISOString(), currentBatches: [], lastMessage: '同义归核已停止，未应用映射'}));
       } else {
-        setTask(current => ({...current, status: 'failed', failed: vocabularySize - processed, currentBatches: [], lastError: `全局归核失败：${error.message}`}));
+        setTask(current => ({...current, status: 'failed', finishedAt: new Date().toISOString(), failed: vocabularySize - processed, currentBatches: [], lastError: `同义归核失败：${error.message}`}));
       }
     } finally {
       abortRefs.current.delete(controller);
@@ -790,11 +810,12 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
   const consolidationRequestCount = globalTermCount
     ? consolidationChunksOf(currentGlobalVocabulary, previewThreshold, previewChunkSize).length
     : 0;
-  const elapsedMs = task.startedAt ? Math.max(0, (active ? clock : Date.now()) - Date.parse(task.startedAt)) : 0;
+  const elapsedUntil = task.finishedAt ? Date.parse(task.finishedAt) : clock;
+  const elapsedMs = task.startedAt ? Math.max(0, elapsedUntil - Date.parse(task.startedAt)) : 0;
   const usage = task.usage || emptyUsage();
 
   return <div className="overlay"><div className="modal ai-modal">
-    <div className="modal-head"><div><h2><Bot size={20}/>AI 分类任务</h2><p>增量分类在波次间尽量复用已有标签；完成后用全局归核统一命名。</p></div><button title="关闭" disabled={active} onClick={onClose}><X size={18}/></button></div>
+    <div className="modal-head"><div><h2><Bot size={20}/>AI 分类任务</h2><p>锁定词表时，AI 只选择已有主标签，并把具体名称写入可搜索关键词。</p></div><button title="关闭" disabled={active} onClick={onClose}><X size={18}/></button></div>
     <div className="ai-key-note"><KeyRound size={17}/><span>请求通过本机 4175 服务转发。API Key 保存于 localStorage 的 <code>{STORAGE_KEY}</code>，不会写入导出 JSON、本地数据库或服务日志。共享电脑不建议保存长期密钥。</span></div>
     <div className="ai-form">
       <label>API 协议<select disabled={active} value={config.protocol} onChange={event => {
@@ -815,26 +836,26 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
       <label><span className="ai-label-row">每批视频数<button type="button" className="ai-help-button" title="解释每批视频数" onClick={() => setHelpTopic(helpTopic === 'batch' ? '' : 'batch')}><CircleHelp size={15}/></button></span><input disabled={active} type="number" min="5" max="40" value={config.batchSize} onChange={event => setConfig({...config, batchSize: event.target.value})}/></label>
       <label><span className="ai-label-row">并发请求数<button type="button" className="ai-help-button" title="解释并发请求数" onClick={() => setHelpTopic(helpTopic === 'concurrency' ? '' : 'concurrency')}><CircleHelp size={15}/></button></span><input disabled={active} type="number" min="1" value={config.concurrency} onChange={event => setConfig({...config, concurrency: event.target.value})}/></label>
       {helpTopic === 'batch' && <div className="ai-help-panel wide"><strong>每批视频数就是一次 API 请求里的视频数量。</strong><span>默认 20 表示把 20 个相互独立的视频元数据一次发给模型，并在同一次响应中取回 20 组标签。它不是相关推荐数量，也不是连续发起 20 次请求。</span></div>}
-      {helpTopic === 'concurrency' && <div className="ai-help-panel wide"><strong>并发决定同时进行几个完整批次请求，没有程序上限。</strong><span>实际同时请求数不会超过剩余批次数。数值过高可能触发 429、RPM/TPM 限制、连接耗尽和瞬时高额 Token 消耗；同一波次也无法互相看到新标签，建议完成后执行全局归核。</span></div>}
+      {helpTopic === 'concurrency' && <div className="ai-help-panel wide"><strong>并发决定同时进行几个完整批次请求，没有程序上限。</strong><span>实际同时请求数不会超过剩余批次数。数值过高可能触发 429、RPM/TPM 限制、连接耗尽和瞬时高额 Token 消耗；锁定受控词表后，各并发批次使用同一套主标签，不再依赖互相交换新标签。</span></div>}
 
       <label>增量处理范围<select disabled={active} value={config.scope} onChange={event => setConfig({...config, scope: event.target.value})}>
         <option value="unprocessed">尚未由 AI 处理（{allItems.filter(item => !item.ai?.processedAt).length}）</option>
         <option value="filtered">当前筛选结果（{filteredItems.length}）</option>
         <option value="all">全部视频（{allItems.length}）</option>
       </select></label>
-      <div className="ai-vocabulary-note"><strong>当前全库标签词表：{currentVocabularySize} 个</strong><span>增量任务开始时从完整资料库统计；成功批次产生的新标签会加入后续波次的提示词。</span></div>
+      <div className="ai-vocabulary-note"><strong>当前全库标签词表：{currentVocabularySize} 个</strong><span>{lockedCanonicalTags.length ? `受控词表已锁定为 ${lockedCanonicalTags.length} 个规范标签；所有批次使用同一词表。` : '增量任务开始时从完整资料库统计；成功批次产生的新标签会加入后续波次的提示词。'}</span></div>
 
       <div className="ai-global-settings wide">
-        <div className="ai-global-title"><GitMerge size={17}/><div><strong>最终全局归核 <button type="button" className="ai-help-button" title="解释全局归核" onClick={() => setHelpTopic(helpTopic === 'global' ? '' : 'global')}><CircleHelp size={15}/></button></strong><span>只发送标签及使用次数。超过阈值后顺序切片，每片继承高频规范锚点；全部成功后才在本地一次性应用映射。</span></div></div>
+        <div className="ai-global-title"><GitMerge size={17}/><div><strong>同义归核 <button type="button" className="ai-help-button" title="解释同义归核" onClick={() => setHelpTopic(helpTopic === 'global' ? '' : 'global')}><CircleHelp size={15}/></button></strong><span>只统一缩写、语言和明确同义名称，不负责把词表压缩到目标数量。目标压缩请使用项目脚本和正式规范。</span></div></div>
         <div className="ai-global-controls">
           <label>切片阈值<input disabled={active} type="number" min="1" value={config.consolidationThreshold} onChange={event => setConfig({...config, consolidationThreshold: event.target.value})}/></label>
           <label>每片词汇数<input disabled={active} type="number" min="1" value={config.consolidationChunkSize} onChange={event => setConfig({...config, consolidationChunkSize: event.target.value})}/></label>
           <label>规范锚点数<input disabled={active} type="number" min="1" value={config.consolidationAnchorSize} onChange={event => setConfig({...config, consolidationAnchorSize: event.target.value})}/></label>
-          <label>归核强度<select disabled={active} value={config.consolidationStrength} onChange={event => setConfig({...config, consolidationStrength: event.target.value})}><option value="conservative">保守</option><option value="balanced">均衡</option><option value="aggressive">积极精简</option></select></label>
+          <label>同义判定<select disabled={active} value={config.consolidationStrength} onChange={event => setConfig({...config, consolidationStrength: event.target.value})}><option value="conservative">严格同义</option><option value="balanced">同义与无损近义</option><option value="aggressive">含安全上下位归并</option></select></label>
         </div>
         <div className="ai-global-stats"><span>唯一标签 {globalTermCount}</span><span>视频 {allItems.length}</span><span>预计请求 {consolidationRequestCount}</span><span>顺序执行</span><span>视频详情 0</span></div>
         {unprocessedCount > 0 && <p className="ai-global-warning">尚有 {unprocessedCount} 条视频未完成初次 AI 分类。现在也能归核，但通常应先完成增量分类，否则之后产生的新标签还需要再次归核。</p>}
-        {helpTopic === 'global' && <div className="ai-help-panel"><strong>默认超过 1000 个词时，每 500 个来源词组成一个顺序请求。</strong><span>后一片会携带前面形成的高频规范锚点，所以能把新片里的同义词继续归入同一命名。归核不并发，避免分片互相不知道结果；自映射无需返回，未映射名称原样保留，任何一片失败或停止都不会修改资料库。</span></div>}
+        {helpTopic === 'global' && <div className="ai-help-panel"><strong>这是命名清洗，不是数量预算器。</strong><span>默认超过 1000 个词时，每 500 个来源词组成一个顺序请求。后一片继承高频规范锚点；锁定 taxonomy 后只把词表外历史别名映射到规范标签，不允许规范标签彼此合并。未映射名称原样保留，任何一片失败或停止都不会修改资料库。目标压缩流程见 docs/TAG-COMPRESSION-SPEC.md。</span></div>}
       </div>
 
       <label className="wide">分类规则<textarea disabled={active} rows="3" value={config.instructions} onChange={event => setConfig({...config, instructions: event.target.value})}/></label>
@@ -863,7 +884,7 @@ export function AiTaggingModal({open, allItems, filteredItems, onApplyBatch, onA
     <div className="modal-actions ai-actions">
       {!active && task.status !== 'paused' && <button className="button" onClick={() => saveConfig(config)}><Save size={16}/>保存配置</button>}
       {!active && task.status !== 'paused' && <button className="button primary" onClick={startClassification}><Bot size={16}/>开始增量分类</button>}
-      {!active && task.status !== 'paused' && <button className="button" onClick={startConsolidation}><GitMerge size={16}/>开始全局归核</button>}
+      {!active && task.status !== 'paused' && <button className="button" onClick={startConsolidation}><GitMerge size={16}/>开始同义归核</button>}
       {task.status === 'running' && task.mode === 'classify' && <button className="button" onClick={pause}><Pause size={16}/>暂停</button>}
       {task.status === 'paused' && <button className="button primary" onClick={resume}><Play size={16}/>继续{modeLabels[task.mode]}</button>}
       {['running', 'pausing', 'paused'].includes(task.status) && <button className="button" onClick={stop}><Square size={15}/>停止</button>}

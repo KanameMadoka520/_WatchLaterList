@@ -76,6 +76,7 @@ const normalize = item => {
     id: item.id || ((item.url || '').match(/BV\w+/)?.[0] || crypto.randomUUID()),
     title: item.title || '未命名视频',
     tags: Array.isArray(item.tags) ? item.tags : [],
+    keywords: Array.isArray(item.keywords) ? item.keywords : [],
     topics: Array.isArray(item.topics) ? item.topics : [],
     collections: Array.isArray(item.collections) ? item.collections : [],
     category: item.category || '',
@@ -86,6 +87,7 @@ const normalize = item => {
 };
 
 const parseTags = value => [...new Set(String(value || '').split(/[\s,，、;；]+/u).map(tag => tag.trim()).filter(Boolean))];
+const parseKeywords = value => [...new Set(String(value || '').split(/[\r\n,，、;；]+/u).map(keyword => keyword.trim()).filter(Boolean))];
 
 const downloadBlob = (name, content, type) => {
   const link = document.createElement('a');
@@ -114,7 +116,7 @@ const mergeItems = (before, incoming) => {
     for (const field of generatedCoverFields) {
       if (item[field] === undefined || item[field] === null || item[field] === '') merged[field] = existing[field];
     }
-    for (const field of ['tags', 'topics', 'collections', 'category', 'note', 'status', 'ai', 'rating', 'localMedia']) {
+    for (const field of ['tags', 'keywords', 'topics', 'collections', 'category', 'note', 'status', 'ai', 'rating', 'localMedia']) {
       const value = rawItem[field];
       if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) merged[field] = existing[field];
     }
@@ -190,6 +192,7 @@ function App() {
   const [coverSource, setCoverSource] = useState(() => localStorage.getItem('watchlater.coverSource') || 'local');
   const [listMode, setListMode] = useState(() => localStorage.getItem('watchlater.listMode') || 'virtual');
   const [items, setItems] = useState([]);
+  const [taxonomy, setTaxonomy] = useState(null);
   const [q, setQ] = useState('');
   const [view, setView] = useState('all');
   const [tag, setTag] = useState('全部');
@@ -216,8 +219,10 @@ function App() {
     try {
       const response = await fetch(`${API}/api/watchlater`);
       const data = await response.json();
+      setTaxonomy(data.taxonomy || null);
       setItems(data.items?.length ? data.items.map(normalize) : seed);
     } catch {
+      setTaxonomy(JSON.parse(localStorage.getItem('watchlater.taxonomy') || 'null'));
       setItems(JSON.parse(localStorage.getItem('watchlater.items') || 'null') || seed);
     }
   };
@@ -225,7 +230,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('watchlater.mode', mode);
     if (mode === 'file') loadFile();
-    else setItems(JSON.parse(localStorage.getItem('watchlater.items') || 'null') || seed);
+    else {
+      setTaxonomy(JSON.parse(localStorage.getItem('watchlater.taxonomy') || 'null'));
+      setItems(JSON.parse(localStorage.getItem('watchlater.items') || 'null') || seed);
+    }
   }, [mode]);
 
   useEffect(() => {
@@ -245,6 +253,10 @@ function App() {
     }, 500);
     return () => clearTimeout(timeout);
   }, [items, mode]);
+
+  useEffect(() => {
+    if (mode === 'browser') localStorage.setItem('watchlater.taxonomy', JSON.stringify(taxonomy));
+  }, [taxonomy, mode]);
 
   useEffect(() => {
     if (mode !== 'file') {
@@ -276,11 +288,11 @@ function App() {
     };
   }, [mode]);
 
-  const saveFileItems = async next => {
+  const saveFileItems = async (next, taxonomyOverride = taxonomy) => {
     const response = await fetch(`${API}/api/watchlater`, {
       method: 'PUT',
       headers: {'content-type': 'application/json'},
-      body: JSON.stringify({items: next})
+      body: JSON.stringify({items: next, taxonomy: taxonomyOverride})
     });
     if (!response.ok) throw new Error((await response.json()).error || '本地数据库写入失败');
   };
@@ -340,6 +352,7 @@ function App() {
       item.note,
       item.category,
       ...(item.tags || []),
+      ...(item.keywords || []),
       ...(item.topics || []),
       ...(item.collections || [])
     ].join(' ').toLowerCase().includes(q.toLowerCase()))
@@ -377,11 +390,13 @@ function App() {
       try {
         const data = JSON.parse(reader.result);
         const incoming = Array.isArray(data) ? data : (data.items || data.videos || []);
+        const incomingTaxonomy = !Array.isArray(data) && data.taxonomy ? data.taxonomy : taxonomy;
         const next = mergeItems(items, incoming);
+        setTaxonomy(incomingTaxonomy);
         setItems(next);
         if (mode === 'file') {
           setBusy(true);
-          await saveFileItems(next);
+          await saveFileItems(next, incomingTaxonomy);
           const jobResponse = await fetch(`${API}/api/cover-job/start`, {
             method: 'POST',
             headers: {'content-type': 'application/json'},
@@ -456,6 +471,7 @@ function App() {
     views: '',
     progress: '',
     tags: [],
+    keywords: [],
     topics: [],
     collections: [],
     category: '',
@@ -465,10 +481,26 @@ function App() {
   });
   const saveEdit = () => {
     if (!editing.title.trim()) return;
-    const item = normalize({...editing, tags: parseTags(tagDraft)});
+    const requestedTags = parseTags(tagDraft);
+    const canonicalTags = new Set((taxonomy?.canonicalTags || [])
+      .map(entry => typeof entry === 'string' ? entry : entry?.name)
+      .filter(Boolean));
+    const movedToKeywords = canonicalTags.size
+      ? requestedTags.filter(value => !canonicalTags.has(value))
+      : [];
+    const acceptedTags = canonicalTags.size
+      ? requestedTags.filter(value => canonicalTags.has(value))
+      : requestedTags;
+    if (canonicalTags.size && !acceptedTags.length && canonicalTags.has('综合')) acceptedTags.push('综合');
+    const item = normalize({
+      ...editing,
+      tags: acceptedTags,
+      keywords: [...new Set([...(editing.keywords || []), ...movedToKeywords])]
+    });
     persist(items.some(existing => existing.id === item.id)
       ? items.map(existing => existing.id === item.id ? item : existing)
       : [item, ...items]);
+    if (movedToKeywords.length) setNotice(`已将 ${movedToKeywords.length} 个非规范标签转存为详细关键词`);
     setEditing(null);
   };
 
@@ -488,6 +520,7 @@ function App() {
       return normalize({
         ...item,
         tags: [...new Set([...(item.tags || []), ...result.tags])],
+        keywords: [...new Set([...(item.keywords || []), ...(result.keywords || [])])],
         category: result.category || item.category || '',
         topics: result.topics,
         collections: result.collections,
@@ -546,7 +579,8 @@ function App() {
     if (mode === 'file') await saveFileItems(next);
     else localStorage.setItem('watchlater.items', JSON.stringify(next));
     const mappingCount = [...tagMap].filter(([from, to]) => from !== to).length;
-    return {changedItems, mappingCount};
+    const finalVocabularySize = new Set(next.flatMap(item => item.tags || [])).size;
+    return {changedItems, mappingCount, finalVocabularySize};
   };
 
   const playerUrl = item => `https://www.bilibili.com/video/${encodeURIComponent(item.id)}/?spm_id_from=333.1007.0.0`;
@@ -612,8 +646,8 @@ function App() {
           <button className={mode === 'browser' ? 'active' : ''} onClick={() => setMode('browser')}><MonitorDown size={15}/>浏览器</button>
         </div>
         <label className={`button ${coverTaskLocked ? 'disabled' : ''}`} title={coverTaskLocked ? '请先暂停后停止封面任务，再导入新数据' : '导入 JSON'}><Upload size={16}/>导入<input type="file" accept=".json,.ndjson" disabled={coverTaskLocked} onChange={importFile}/></label>
-        <button className="button" onClick={() => downloadJson(`watchlater-${mode}.json`, {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'watchlater', mode, exportedAt: new Date().toISOString(), items})}><Download size={16}/>JSON</button>
-        <button className="button" onClick={() => downloadJson('bilistar-import.json', {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'favorites', exportedAt: new Date().toISOString(), items: items.map(item => ({...item, libraryType: 'favorites', status: item.status === 'archived' ? 'archived' : 'active', localMedia: null}))})}><FolderHeart size={16}/>导出到 BiliStar</button>
+        <button className="button" onClick={() => downloadJson(`watchlater-${mode}.json`, {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'watchlater', mode, exportedAt: new Date().toISOString(), taxonomy, items})}><Download size={16}/>JSON</button>
+        <button className="button" onClick={() => downloadJson('bilistar-import.json', {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'favorites', exportedAt: new Date().toISOString(), taxonomy, items: items.map(item => ({...item, libraryType: 'favorites', status: item.status === 'archived' ? 'archived' : 'active', localMedia: null}))})}><FolderHeart size={16}/>导出到 BiliStar</button>
         <button className="button" onClick={() => setHtmlExportOpen(true)}><FileDown size={16}/>HTML</button>
         <button className="button" disabled={coverTaskLocked} onClick={() => setAiOpen(true)}><Bot size={16}/>AI 标签</button>
         {mode === 'file' && <button className="button" disabled={busy || coverTaskLocked} onClick={() => enrich()}><ImageDown size={16}/>补全封面</button>}
@@ -711,6 +745,7 @@ function App() {
       open={aiOpen}
       allItems={items}
       filteredItems={filtered}
+      taxonomy={taxonomy}
       onApplyBatch={applyAiBatch}
       onApplyConsolidation={applyAiConsolidation}
       onClose={() => setAiOpen(false)}
@@ -730,8 +765,9 @@ function App() {
         <label>主分类<input value={editing.category || ''} onChange={event => setEditing({...editing, category: event.target.value})}/></label>
         <label>主题（空格或逗号分隔）<input value={(editing.topics || []).join(' ')} onChange={event => setEditing({...editing, topics: parseTags(event.target.value)})}/></label>
         <label>收藏夹（空格或逗号分隔）<input value={(editing.collections || []).join(' ')} onChange={event => setEditing({...editing, collections: parseTags(event.target.value)})}/></label>
-        <label className="wide">标签（空格、逗号、中文逗号均可）<input value={tagDraft} onChange={event => setTagDraft(event.target.value)}/></label>
+        <label className="wide">标签（空格、逗号、中文逗号均可；锁定词表外的名称自动转为关键词）<input value={tagDraft} onChange={event => setTagDraft(event.target.value)}/></label>
         {tags.length > 1 && <div className="tag-library"><span>已有标签，点击复用：</span><div>{tags.filter(value => value !== '全部').map(value => <button type="button" key={value} className={parseTags(tagDraft).includes(value) ? 'selected' : ''} onClick={() => toggleEditingTag(value)}>{value}</button>)}</div></div>}
+        <label className="wide">详细关键词（每行一个或使用逗号分隔）<textarea rows="4" value={(editing.keywords || []).join('\n')} onChange={event => setEditing({...editing, keywords: parseKeywords(event.target.value)})}/></label>
         <label className="wide">个人备注<textarea rows="5" value={editing.note || ''} onChange={event => setEditing({...editing, note: event.target.value})}/></label>
       </div>
       <div className="modal-actions"><button className="button" onClick={() => setEditing(null)}>取消</button><button className="button primary" onClick={saveEdit}>保存</button></div>

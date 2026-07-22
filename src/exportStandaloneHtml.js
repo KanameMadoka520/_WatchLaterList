@@ -94,7 +94,7 @@ export function buildStandaloneHtml(items, {imageMode = 'remote', exportedAt = n
     var filtered=items.filter(function(item){
       var statusOk=state.view==='all'||item.status===state.view;
       var tagOk=state.tag==='全部'||(item.tags||[]).indexOf(state.tag)!==-1;
-      var haystack=[item.title,item.author,item.id].concat(item.tags||[]).join(' ').toLowerCase();
+      var haystack=[item.title,item.author,item.id,item.category,item.note].concat(item.tags||[],item.keywords||[],item.topics||[],item.collections||[]).join(' ').toLowerCase();
       return statusOk&&tagOk&&(!query||haystack.indexOf(query)!==-1);
     });
     var pageCount=Math.max(1,Math.ceil(filtered.length/pageSize));

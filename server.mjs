@@ -30,6 +30,7 @@ const generatedCoverFields = [
 const normalizeItem = item => ({
   ...item,
   tags: Array.isArray(item.tags) ? item.tags : [],
+  keywords: Array.isArray(item.keywords) ? item.keywords : [],
   topics: Array.isArray(item.topics) ? item.topics : [],
   collections: Array.isArray(item.collections) ? item.collections : [],
   category: item.category || '',
@@ -146,9 +147,15 @@ const readBody = req => new Promise((resolve, reject) => {
 
 const readDb = async () => normalizeDatabase(JSON.parse(await fs.readFile(dbFile, 'utf8')));
 let dbWriteQueue = Promise.resolve();
-const writeDb = items => {
+const writeDb = (items, metadata = {}) => {
   const operation = dbWriteQueue.catch(() => {}).then(async () => {
+    let existing = {};
+    try {
+      existing = JSON.parse(await fs.readFile(dbFile, 'utf8'));
+    } catch {}
     const output = {
+      ...existing,
+      ...metadata,
       version: 2,
       schema: 'bili-library/v2',
       libraryType: 'watchlater',
@@ -176,7 +183,7 @@ const mergeIncomingWithLocalCovers = (existingItems, incomingItems) => {
         merged[field] = existing[field];
       }
     }
-    for (const field of ['tags', 'topics', 'collections', 'category', 'note', 'status', 'ai', 'rating', 'localMedia']) {
+    for (const field of ['tags', 'keywords', 'topics', 'collections', 'category', 'note', 'status', 'ai', 'rating', 'localMedia']) {
       const value = rawIncoming[field];
       if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) {
         merged[field] = existing[field];
@@ -467,7 +474,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const incoming = Array.isArray(body.items) ? body.items : [];
       const existing = await readDb();
-      return sendJson(res, 200, await writeDb(mergeIncomingWithLocalCovers(existing.items, incoming)));
+      const metadata = body.taxonomy ? {taxonomy: body.taxonomy} : {};
+      return sendJson(res, 200, await writeDb(mergeIncomingWithLocalCovers(existing.items, incoming), metadata));
     }
 
     if (url.pathname === '/api/ai-proxy' && req.method === 'POST') return await proxyAiRequest(req, res);
