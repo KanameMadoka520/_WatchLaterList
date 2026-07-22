@@ -872,8 +872,8 @@ function App() {
           </div>
           <HelpButton label="两种存储模式" onClick={() => setAppHelp('storage')}/>
         </div>
-        <div className="header-tool"><label className={`button ${coverTaskLocked ? 'disabled' : ''}`} title={coverTaskLocked ? '请先暂停后停止封面任务，再导入新数据' : '导入 JSON'}><Upload size={16}/>导入<input type="file" accept=".json,.ndjson" disabled={coverTaskLocked} onChange={importFile}/></label><HelpButton label="导入 JSON" onClick={() => setAppHelp('import')}/></div>
-        <div className="header-tool"><button className="button" onClick={() => setDataExportOpen(true)}><Download size={16}/>导出数据</button><HelpButton label="JSON 导出" onClick={() => setAppHelp('json')}/></div>
+        <div className="header-tool"><label className={`button ${coverTaskLocked ? 'disabled' : ''}`} title={coverTaskLocked ? '请先暂停后停止封面任务，再导入新数据' : '导入 JSON'}><Download size={16}/>导入<input type="file" accept=".json,.ndjson" disabled={coverTaskLocked} onChange={importFile}/></label><HelpButton label="导入 JSON" onClick={() => setAppHelp('import')}/></div>
+        <div className="header-tool"><button className="button" onClick={() => setDataExportOpen(true)}><Upload size={16}/>导出数据</button><HelpButton label="JSON 导出" onClick={() => setAppHelp('json')}/></div>
         <div className="header-tool"><button className="button" onClick={() => downloadJson('bilistar-import.json', {version: SCHEMA_VERSION, schema: 'bili-library/v2', libraryType: 'favorites', exportedAt: new Date().toISOString(), taxonomy, items: items.map(item => ({...item, libraryType: 'favorites', status: item.status === 'archived' ? 'archived' : 'active', localMedia: null}))})}><FolderHeart size={16}/>BiliStar</button><HelpButton label="导出到 BiliStar" onClick={() => setAppHelp('bilistar')}/></div>
         <div className="header-tool"><button className="button" onClick={() => setHtmlExportOpen(true)}><FileDown size={16}/>HTML</button><HelpButton label="HTML 导出" onClick={() => setAppHelp('html')}/></div>
         <button className="button" disabled={coverTaskLocked} onClick={() => setAiOpen(true)}><Bot size={16}/>AI 标签</button>
